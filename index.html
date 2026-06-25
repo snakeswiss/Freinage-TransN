@@ -856,34 +856,40 @@ ${perTxt}${ec.scenario?`\n\nClasse = % de freinage, pas une vitesse.\nNON recalc
     `<p class="say">${cp.say}</p><div class="formula"><span class="lbl"># R 300.5 §3.5.4</span>\n${cp.formula}</div>`);
 
   /* 4 — Immobilisation : effort de retenue (LMR §5.5/§5.7 + Compl.1) — compte basé sur la force */
-  const P=poidsTrain(), req=effortRequis(P,decl), ress=ressortTotal();
+  const P=poidsTrain(), req=effortRequis(P,decl);
   const sab1=sabotKN();
+  const ressFull=ressortTotal();                 // frein à ressort si serré (véhicule à l'arrêt)
+  const ress=towMode?0:ressFull;                 // remorqué : desserré pour permettre le remorquage -> ne retient pas
   const nSab = (req-ress)>0 ? Math.ceil((req-ress)/sab1) : 0;   // basé sur la force (échelle LMR)
   const dispo=ress+nSab*sab1;
   const declMaxRess = Math.floor(Math.min(CAP, ress/(K_RET*P)));
-  const rows=[0,1,2,3].map(n=>{ const e=ress+n*sab1; return {n,e,dmax:Math.floor(Math.min(CAP,e/(K_RET*P))),cur:n===nSab}; });
-  let last=rows.findIndex(r=>r.dmax>=CAP); if(last<0) last=3;
+  const declMaxRessFull = Math.floor(Math.min(CAP, ressFull/(K_RET*P)));   // si frein à ressort resserré à l'arrêt
+  const maxN=Math.min(8,Math.max(3,nSab));
+  const rows=[...Array(maxN+1).keys()].map(n=>{ const e=ress+n*sab1; return {n,e,dmax:Math.floor(Math.min(CAP,e/(K_RET*P))),cur:n===nSab}; });
+  let last=rows.findIndex(r=>r.dmax>=CAP); if(last<0) last=maxN;
   const ladder=rows.slice(0,last+1).map(r=>
-    `<tr class="${r.cur?'cur':''}"><td>${r.n===0?'Frein à ressort seul':'+ '+r.n+' sabot'+(r.n>1?'s':'')}</td><td>${r.e.toFixed(0)} kN</td><td>≤ ${r.dmax.toFixed(0)} ‰</td></tr>`).join("");
+    `<tr class="${r.cur?'cur':''}"><td>${r.n===0?(towMode?'Frein à ressort desserré':'Frein à ressort seul'):'+ '+r.n+' sabot'+(r.n>1?'s':'')}</td><td>${r.e.toFixed(0)} kN</td><td>≤ ${r.dmax.toFixed(0)} ‰</td></tr>`).join("");
   const beyond = decl>CAP ? `<p class="say" style="color:var(--bad);margin-top:8px"><b>Au-delà de 50 ‰</b> : hors table et hors certification frein à ressort — valeur extrapolée.</p>` : "";
   // R 300.4 §1.7.2 : règle d'exploitation pour mise en garage prolongée — secondaire, n'entre PAS dans le compte LMR
-  const parkNote = decl>20 ? `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Mise en garage prolongée</b> — R 300.4 §1.7.2 : pour tout véhicule garé sur (ou face à) une pente <b>&gt; 20 ‰</b>, poser <b>≥ 1 sabot</b> en plus du frein à ressort (règle générale ; ici le frein à ressort seul tient jusqu'à <b>${declMaxRess.toFixed(0)} ‰</b> selon la LMR).</p>` : "";
+  const parkNote = (decl>20 && !towMode) ? `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Mise en garage prolongée</b> — R 300.4 §1.7.2 : pour tout véhicule garé sur (ou face à) une pente <b>&gt; 20 ‰</b>, poser <b>≥ 1 sabot</b> en plus du frein à ressort (règle générale ; ici le frein à ressort seul tient jusqu'à <b>${declMaxRess.toFixed(0)} ‰</b> selon la LMR).</p>` : "";
   const iBadge = nSab===0 ? "Aucun sabot" : `${nSab} sabot${nSab>1?"s":""}`;
-  const towImmoNote = towMode ? `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Remorqué</b> : le frein à ressort (frein d'immobilisation) est indépendant du frein à air — valeurs inchangées. Rame tractée sans air = frein à ressort serré par défaut.</p>` : "";
+  const towImmoNote = towMode ? `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Remorqué en panne</b> : pour permettre le remorquage, le <b>frein à ressort doit être desserré</b> → il ne retient plus le convoi. Immobilise ce véhicule aux <b>sabots</b> (retenue par sabots seuls, ci-dessus). Si le véhicule est à l'arrêt et que le frein à ressort peut être <b>resserré</b> (air purgé, frein non bloqué mécaniquement), il tient seul jusqu'à <b>${declMaxRessFull.toFixed(0)} ‰</b>${declMaxRessFull>=decl?` → aucun sabot`:` → sabot au-delà`}.</p>` : "";
   const hasDominoPar = train.some(c=>c.par && V[c.key].fam==="domino");
   const nRessPar = train.filter(c=>c.parRessort).length;
   let paralyseNote = "";
-  if(hasDominoPar) paralyseNote += `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Frein de service paralysé</b> : isole le frein de service (poids-frein, §9.2.1) → agit sur le <b>rapport</b>, pas sur l'immobilisation. Le <b>frein à ressort</b> (§5.7) est indépendant. Pour retirer aussi le frein à ressort d'un véhicule, coche « Frein à ressort ».</p>`;
-  if(nRessPar>0) paralyseNote += `<p class="say" style="margin-top:8px;color:var(--bad)"><b>Frein à ressort paralysé</b> sur ${nRessPar} véhicule${nRessPar>1?"s":""} → exclu${nRessPar>1?"s":""} de l'immobilisation (frein à ressort réduit à <b>${ress.toFixed(0)} kN</b> ci-dessus).</p>`;
+  if(hasDominoPar && !towMode) paralyseNote += `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Frein de service paralysé</b> : isole le frein de service (poids-frein, §9.2.1) → agit sur le <b>rapport</b>, pas sur l'immobilisation. Le <b>frein à ressort</b> (§5.7) est indépendant. Pour retirer aussi le frein à ressort d'un véhicule, coche « Frein à ressort ».</p>`;
+  if(nRessPar>0 && !towMode) paralyseNote += `<p class="say" style="margin-top:8px;color:var(--bad)"><b>Frein à ressort paralysé</b> sur ${nRessPar} véhicule${nRessPar>1?"s":""} → exclu${nRessPar>1?"s":""} de l'immobilisation (frein à ressort réduit à <b>${ress.toFixed(0)} kN</b> ci-dessus).</p>`;
   const verdict = nSab===0
     ? `le frein à ressort seul suffit jusqu'à <b>${declMaxRess.toFixed(0)} ‰</b> → <b>aucun sabot</b>`
-    : `ajouter <b>${nSab} sabot${nSab>1?"s":""} d'arrêt</b> (${dispo.toFixed(0)} kN ≥ ${req.toFixed(0)} kN)`;
+    : (towMode
+        ? `immobiliser aux <b>${nSab} sabot${nSab>1?"s":""} d'arrêt</b> (${dispo.toFixed(0)} kN ≥ ${req.toFixed(0)} kN) — frein à ressort desserré`
+        : `ajouter <b>${nSab} sabot${nSab>1?"s":""} d'arrêt</b> (${dispo.toFixed(0)} kN ≥ ${req.toFixed(0)} kN)`);
   const c4=card(nSab===0?"is-ok":"is-warn",`Immobilisation à ${declTxt} ‰`, nSab===0?"b-ok":"b-warn", iBadge,
-    `<p class="say">Frein à ressort <b>${ress.toFixed(0)} kN</b> · requis <b>${req.toFixed(0)} kN</b> → ${verdict}.</p>
+    `<p class="say">Frein à ressort <b>${ress.toFixed(0)} kN</b>${towMode?" <span style='color:var(--muted)'>(desserré — remorquage)</span>":""} · requis <b>${req.toFixed(0)} kN</b> → ${verdict}.</p>
      <table class="ladder"><thead><tr><th>Immobilisation</th><th>Effort</th><th>Rampe&nbsp;max</th></tr></thead><tbody>${ladder}</tbody></table>${parkNote}${towImmoNote}${paralyseNote}${beyond}
      <div class="formula"><span class="lbl"># effort de retenue : LMR §5.7/§5.5 (= Compl.1 DE PCT NIOP) · 1 sabot = ${sab1} kN (${charge==="total"?"chargé":"vide"})</span>
 Requis ≈ 0.01385 × ${P.toFixed(0)} t × ${declTxt} ‰ = ${req.toFixed(0)} kN
-Frein à ressort seul tient jusqu'à ${declMaxRess.toFixed(0)} ‰ ; sabot nécessaire (force) au-delà.
+${towMode?`Remorqué : frein à ressort desserré (0 kN) -> retenue par sabots seuls. Resserré à l'arrêt : tient jusqu'à ${declMaxRessFull.toFixed(0)} ‰.`:`Frein à ressort seul tient jusqu'à ${declMaxRess.toFixed(0)} ‰ ; sabot nécessaire (force) au-delà.`}
 Frein à air seul : autorisé uniquement < 2 ‰ et remise en garage < 30 min (R 300.5 §2.4).</div>`);
 
   out.innerHTML=c1+c2+c3+c4+tractionCardHTML()+tractorCardHTML();
