@@ -46,17 +46,17 @@ VEHICLES = {
                     tare=36, total=50, pf_R=70, pf_RMg=92, remorque=70, rq_vmax=80,
                     ressort_v=21, ressort_c=25, sabot_v=18, sabot_c=21, freine=True,
                     src="LMR Domino P20005282 §1.1.3"),
-    "ABt":     dict(nom="ABt DO (commande)", role="commande", cat="R", vmax=140,
+    "ABt":     dict(nom="ABt DO (voiture de commande)", role="commande", cat="R", vmax=140,
                     tare=38, total=43, pf_R=55, pf_RMg=76, remorque=55, rq_vmax=80,
                     ressort_v=21, ressort_c=21, sabot_v=18, sabot_c=21, freine=True,
                     src="LMR Domino P20005282 §1.1.2"),
     # --- Flirt transN (rames indissociables -> 1 unité freinée) ---
-    "RABe523": dict(nom="RABe 523 transN (074-077)", role="rame", cat="R", vmax=160,
+    "RABe523": dict(nom="RABe 523 (rame automotrice, 074-077)", role="rame", cat="R", vmax=160,
                     tare=121, total=145, pf_R=245, pf_RMg=281, remorque=179, rq_vmax=140,
                     ressort_v=124, ressort_c=124, sabot_v=19, sabot_c=25, freine=True,
                     note="frein à ressort 124 kN jusqu'à 50 ‰ (rame ligne forte pente)",
                     src="LMR Flirt P20003126 §1.1.7"),
-    "RABe527": dict(nom="RABe 527 transN (331-333)", role="rame", cat="R", vmax=160,
+    "RABe527": dict(nom="RABe 527 (rame automotrice, 331-333)", role="rame", cat="R", vmax=160,
                     tare=120, total=141, pf_R=226, pf_RMg=241, remorque=96, rq_vmax=140,
                     ressort_v=73, ressort_c=80, sabot_v=19, sabot_c=25, freine=True,
                     note="pf_R max 251 t ; cat. homologuée R 150%",
@@ -96,12 +96,19 @@ BANDS = {"R": (105, 160), "A": (50, 120), "D": (50, 80)}
 BREMS = {"R": [150, 135, 125, 115, 105],
          "AD": [115, 105, 95, 85, 80, 75, 70, 65, 60, 50]}
 
-# Tableau de freinage IIA (DE-OCF) : rapport de freinage PARTIEL minimal exigé
-# à 25 km/h selon la déclivité. NON fourni dans les documents -> À CONFIRMER
-# depuis le tableau de freinage IIA officiel. Mets ici la vraie valeur :
-RAPPORT_PARTIEL_MIN_25KMH = {
-    28: None,    # <-- 28 ‰ : renseigner depuis le tableau IIA
-}
+# Tableau de freinage IIA (DE-OCF transN), colonne 25 km/h : rapport de freinage
+# PARTIEL minimal exigé (%) par déclivité déterminante (DE PCT NIOP §3.1 ;
+# seuil R 300.5 §3.5.4). Lecture par tranche : 1re déclivité >= déclivité considérée.
+PARTIEL_IIA_25 = [(0, 12), (5, 16), (10, 19), (15, 23), (20, 27), (25, 31),
+                  (30, 36), (35, 42), (40, 48), (45, 53), (50, 59)]
+
+
+def seuil_partiel(decl):
+    """Renvoie (tranche_‰, seuil_%) ou (None, None) si > 50 ‰ (hors tableau IIA)."""
+    for g, v in PARTIEL_IIA_25:
+        if decl <= g:
+            return g, v
+    return None, None
 
 # =============================================================================
 #  MOTEURS DE TRACTION  (RBDe 560 & Flirt 4 él. = 4 moteurs, 2 bogies)
@@ -244,20 +251,25 @@ def categorie(rf):
 # =============================================================================
 #  6. RUPTURE D'ATTELAGE — RAPPORT DE FREINAGE PARTIEL  (R 300.5 §3.5.4)
 # =============================================================================
-def controle_partiel(train, decl=27, freins_paralyses=None):
+def controle_partiel(train, decl=27, freins_paralyses=None, flirt_brakes=None):
     """
     Règle R 300.5 §3.5.4 :
-      - Si TOUS les véhicules sont freinés -> rapport partiel ATTEINT, pas de
-        calcul nécessaire (cas normal Flirt/Domino).
-      - Sinon, calculer le rapport partiel à chaque point de coupure (depuis la
-        queue vers chaque coupure ; depuis la tête jusqu'après le 5e véhicule)
+      - Si TOUS les véhicules sont pleinement freinés -> rapport partiel ATTEINT,
+        pas de calcul (cas normal Flirt/Domino).
+      - Sinon, calculer le rapport partiel à chaque attelage (partie avant / arrière)
         et le comparer au minimum exigé à 25 km/h pour la déclivité.
-    freins_paralyses = liste d'index (0-based) de véhicules au frein paralysé.
+    freins_paralyses = index (0-based) de véhicules Domino au frein de service paralysé.
+    flirt_brakes     = {index: scénario} de bogies Flirt paralysés (§9.4), p.ex. {1:"p3"}.
     """
     freins_paralyses = set(freins_paralyses or [])
-    etat = []
+    flirt_brakes = flirt_brakes or {}
+
+    def fb_of(i, v):
+        return flirt_brakes.get(i, "none") if v["role"] == "rame" else "none"
+
+    etat = []        # True = pleinement freiné (poids-frein nominal)
     for i, v in enumerate(train):
-        freine = v["freine"] and (i not in freins_paralyses)
+        freine = v["freine"] and (i not in freins_paralyses) and fb_of(i, v) == "none"
         etat.append(freine)
 
     if all(etat):
@@ -268,36 +280,48 @@ def controle_partiel(train, decl=27, freins_paralyses=None):
                        "d'urgence (rupture CG) sur les DEUX parties, chacune "
                        "restant freinée."}
 
-    # --- Cas avec frein(s) paralysé(s) : calcul des rapports partiels ---
-    P = [v["total"] for v in train]
-    PF = [v["pf_R"] if etat[i] else 0.0 for i, v in enumerate(train)]
-    n = len(train)
-    partiels = []
-    # depuis la queue jusqu'à chaque point de coupure
-    for cut in range(1, n):
-        seg = range(cut, n)  # partie arrière
-        pp, pf = sum(P[i] for i in seg), sum(PF[i] for i in seg)
-        partiels.append(("queue", cut, pf / pp * 100 if pp else 0))
-    # depuis la tête jusqu'après le 5e véhicule de la charge remorquée
-    for cut in range(1, min(n, 6)):
-        seg = range(0, cut + 1)
-        pp, pf = sum(P[i] for i in seg), sum(PF[i] for i in seg)
-        partiels.append(("tête", cut, pf / pp * 100 if pp else 0))
+    # --- Cas avec frein(s) paralysé(s) : rapport partiel à CHAQUE attelage ---
+    def eff_pf(i, v):
+        # poids-frein effectif : 0 si paralysé/non freiné ; catégorie dégradée §9.4
+        # pour un Flirt à bogies paralysés (les bogies sains freinent) ; sinon nominal.
+        if (i in freins_paralyses) or not v["freine"]:
+            return 0.0
+        fb = fb_of(i, v)
+        if fb != "none":
+            s = FLIRT_BRAKE[fb]
+            return (s["reihe"] / 100 * v["total"]) if s["reihe"] is not None else v["remorque"]
+        return v["pf_R"]
 
-    rf_min = min(p[2] for p in partiels)
-    seuil = RAPPORT_PARTIEL_MIN_25KMH.get(int(round(decl)))
-    if seuil is None:
-        verdict = (f"plus petit rapport partiel = {rf_min:.0f} % — comparer au "
-                   f"tableau de freinage IIA à 25 km/h / {decl:.0f} ‰ "
-                   f"(valeur à renseigner).")
+    P = [v["total"] for v in train]
+    PF = [eff_pf(i, v) for i, v in enumerate(train)]
+    n = len(train)
+    g_br, seuil = seuil_partiel(decl)
+    # détail par attelage : coupure entre le véhicule i et i+1 -> partie avant / arrière
+    coupures = []
+    for i in range(n - 1):
+        fpf = sum(PF[j] for j in range(0, i + 1)); fw = sum(P[j] for j in range(0, i + 1))
+        rpf = sum(PF[j] for j in range(i + 1, n)); rw = sum(P[j] for j in range(i + 1, n))
+        coupures.append({"i": i,
+                         "fr": fpf / fw * 100 if fw else 0,
+                         "rr": rpf / rw * 100 if rw else 0})
+    rf_min = min(min(c["fr"], c["rr"]) for c in coupures)
+    if seuil is None:   # > 50 ‰ : hors tableau de freinage IIA
+        verdict = (f"plus petit rapport partiel = {rf_min:.0f} % — au-delà de 50 ‰, "
+                   f"hors tableau de freinage IIA (à évaluer selon prescriptions).")
         ok = None
+    elif rf_min <= 0:
+        verdict = ("une rupture peut isoler une partie SANS frein actif -> risque "
+                   "de dérive, à sécuriser (R 300.5 §12.2).")
+        ok = False
     else:
         ok = rf_min >= seuil
-        verdict = (f"plus petit rapport partiel = {rf_min:.0f} % "
-                   f"({'>=' if ok else '<'} {seuil} % exigé à 25 km/h / "
-                   f"{decl:.0f} ‰) -> {'OK' if ok else 'INSUFFISANT'}")
+        br_txt = (f"{g_br} ‰" if g_br == int(round(decl))
+                  else f"{decl:.0f} ‰ -> tranche {g_br} ‰")
+        verdict = (f"pire coupure : plus petit rapport partiel = {rf_min:.0f} % "
+                   f"({'>=' if ok else '<'} {seuil} % requis ; tableau de freinage "
+                   f"IIA, 25 km/h, {br_txt}) -> {'OK, suffisant' if ok else 'INSUFFISANT'}")
     return {"ok": ok, "auto": False, "rf_min": rf_min,
-            "partiels": partiels, "msg": verdict}
+            "coupures": coupures, "seuil": seuil, "msg": verdict}
 
 # =============================================================================
 #  7. PEUT-ON ROULER ?
@@ -454,6 +478,14 @@ def analyse_remorque(units, decl=27, charge="total"):
     L.append("    Pour remorquer, le frein à ressort doit être desserré -> il ne retient "
              "pas le convoi. Immobiliser aux sabots, ou resserrer le frein à ressort à "
              "l'arrêt (air purgé, frein non bloqué mécaniquement).")
+    L.append("[4] RUPTURE D'ATTELAGE")
+    if all(v["freine"] for v in train):
+        L.append("    Tous les véhicules freinent (frein à air) -> freine des 2 côtés. Une "
+                 "rupture déchire la conduite générale -> frein d'urgence (air) sur chaque "
+                 "partie, avec le poids-frein REMORQUÉ (réduit, pas de frein électrique).")
+    else:
+        L.append("    Véhicule non freiné présent -> vérifier le rapport partiel "
+                 "(frein à air seul, poids-frein remorqué).")
     return "\n".join(L)
 
 
@@ -658,9 +690,38 @@ def analyse(units, decl=27, charge="total", freins_paralyses=None, mg=False,
                      f"Vitesse réelle à {decl:.0f} ‰ : RADN.")
 
     # 3) Rupture d'attelage
-    cp = controle_partiel(train, decl, freins_paralyses)
-    L.append("\n[3] RUPTURE D'ATTELAGE (rapport de freinage partiel)")
+    cp = controle_partiel(train, decl, freins_paralyses, flirt_brakes)
+    L.append("\n[3] RAPPORT DE FREINAGE PARTIEL (en cas de rupture d'attelage)")
     L.append("    " + cp["msg"])
+    if cp.get("coupures"):
+        seuil = cp.get("seuil")
+        fp = set(freins_paralyses or [])
+        fb = flirt_brakes or {}
+        courts = [v["nom"].split("(")[0].strip() for v in train]
+
+        def _mark(i, v, c):
+            if v["role"] == "rame" and fb.get(i, "none") != "none":
+                s = FLIRT_BRAKE[fb[i]]
+                tag = f"{s['train']} {s['reihe']}" if s["reihe"] is not None else "remorqué"
+                return f"{c} [{tag} §9.4]"
+            if i in fp or not v["freine"]:
+                return f"{c}*"
+            return c
+
+        seq = " | ".join(_mark(i, v, courts[i]) for i, v in enumerate(train))
+        L.append(f"    Train : [ {seq} ]   (* = frein paralysé ; [§9.4] = Flirt bogies paralysés)")
+
+        def _ftxt(rap):
+            if rap <= 0:
+                return f"{rap:3.0f}% NE FREINE PAS"
+            if seuil is not None and rap < seuil:
+                return f"{rap:3.0f}% insuffisant"
+            return f"{rap:3.0f}% freine"
+
+        for c in cp["coupures"]:
+            i = c["i"]
+            L.append(f"      coupure apres veh.{i+1} «{courts[i]}» : "
+                     f"avant {_ftxt(c['fr'])}  |  arriere {_ftxt(c['rr'])}")
 
     # 4) Immobilisation
     im = immobilisation(train, decl, charge, flirt_brakes, freins_ressort_paralyses)
