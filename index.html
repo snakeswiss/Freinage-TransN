@@ -118,9 +118,11 @@
   }
   .pz .dot{width:11px; height:11px; border-radius:3px; border:1.5px solid var(--line-strong); flex:0 0 auto}
   .car.par{border-color:var(--bad-line); background:var(--bad-bg)}
-  .car.par .pz{color:var(--bad); font-weight:700}
-  .car.par .pz .dot{background:var(--bad); border-color:var(--bad)}
+  .pz.on{color:var(--bad); font-weight:700}
+  .pz.on .dot{background:var(--bad); border-color:var(--bad)}
+  .pz + .pz{margin-top:3px; padding-top:3px; border-top:0}
   .car.par .name{text-decoration:line-through; text-decoration-color:var(--bad)}
+  .car.domino{width:162px}
   .car.flirt{width:158px}
   .fbwrap{margin-top:7px; padding-top:7px; border-top:1px solid var(--line)}
   .fblab{display:block; font-size:9.5px; font-weight:700; color:var(--faint); letter-spacing:.3px; text-transform:uppercase; margin-bottom:4px}
@@ -618,6 +620,7 @@ const poidsFrein=()=>train.reduce((s,c)=>{
   return s + (c.par?0:V[c.key].pfR);
 },0);
 const ressortTotal=()=>train.reduce((s,c)=>{
+  if(c.parRessort) return s;                  // frein à ressort paralysé -> ne contribue pas à l'immobilisation
   let r=V[c.key].ressort[source][charge==="total"?1:0];
   if(V[c.key].fam==="flirt" && c.fb && c.fb!=="none") r*=(1-FLIRT_BRAKE[c.fb].ressortRed);
   return s+r;
@@ -741,12 +744,14 @@ function renderTrain(){
   else{
     el.innerHTML=train.map((c,i)=>{
       const v=V[c.key], isF=v.fam==="flirt";
+      const hasRess = !isF && (v.ressort[source][charge==="total"?1:0]>0);
       const ctrl = isF
         ? `<div class="fbwrap"><span class="fblab">Freins (bogie)</span>
             <select class="fbsel" data-fb="${i}">${FLIRT_BRAKE_ORDER.map(k=>
               `<option value="${k}" ${c.fb===k?"selected":""}>${k==="none"?"Freins OK":FLIRT_BRAKE[k].lbl}</option>`).join("")}</select></div>`
-        : `<div class="pz" data-z="${i}"><span class="dot"></span>${c.par?'Frein paralysé':'Frein OK'}</div>`;
-      const flagged = isF ? (c.fb&&c.fb!=="none") : c.par;
+        : `<div class="pz ${c.par?'on':''}" data-z="${i}"><span class="dot"></span>Frein de service : ${c.par?'paralysé':'OK'}</div>`
+          + (hasRess ? `<div class="pz ${c.parRessort?'on':''}" data-zr="${i}"><span class="dot"></span>Frein à ressort : ${c.parRessort?'paralysé':'OK'}</div>` : "");
+      const flagged = isF ? (c.fb&&c.fb!=="none") : (c.par||c.parRessort);
       return `<div class="car ${v.fam} ${flagged?'par':''}">
         <button class="x" data-x="${i}" title="Retirer">×</button>
         <div class="fam">${v.fam}</div>
@@ -865,12 +870,17 @@ ${perTxt}${ec.scenario?`\n\nClasse = % de freinage, pas une vitesse.\nNON recalc
   const parkNote = decl>20 ? `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Mise en garage prolongée</b> — R 300.4 §1.7.2 : pour tout véhicule garé sur (ou face à) une pente <b>&gt; 20 ‰</b>, poser <b>≥ 1 sabot</b> en plus du frein à ressort (règle générale ; ici le frein à ressort seul tient jusqu'à <b>${declMaxRess.toFixed(0)} ‰</b> selon la LMR).</p>` : "";
   const iBadge = nSab===0 ? "Aucun sabot" : `${nSab} sabot${nSab>1?"s":""}`;
   const towImmoNote = towMode ? `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Remorqué</b> : le frein à ressort (frein d'immobilisation) est indépendant du frein à air — valeurs inchangées. Rame tractée sans air = frein à ressort serré par défaut.</p>` : "";
+  const hasDominoPar = train.some(c=>c.par && V[c.key].fam==="domino");
+  const nRessPar = train.filter(c=>c.parRessort).length;
+  let paralyseNote = "";
+  if(hasDominoPar) paralyseNote += `<p class="say" style="margin-top:8px;color:var(--muted)"><b>Frein de service paralysé</b> : isole le frein de service (poids-frein, §9.2.1) → agit sur le <b>rapport</b>, pas sur l'immobilisation. Le <b>frein à ressort</b> (§5.7) est indépendant. Pour retirer aussi le frein à ressort d'un véhicule, coche « Frein à ressort ».</p>`;
+  if(nRessPar>0) paralyseNote += `<p class="say" style="margin-top:8px;color:var(--bad)"><b>Frein à ressort paralysé</b> sur ${nRessPar} véhicule${nRessPar>1?"s":""} → exclu${nRessPar>1?"s":""} de l'immobilisation (frein à ressort réduit à <b>${ress.toFixed(0)} kN</b> ci-dessus).</p>`;
   const verdict = nSab===0
     ? `le frein à ressort seul suffit jusqu'à <b>${declMaxRess.toFixed(0)} ‰</b> → <b>aucun sabot</b>`
     : `ajouter <b>${nSab} sabot${nSab>1?"s":""} d'arrêt</b> (${dispo.toFixed(0)} kN ≥ ${req.toFixed(0)} kN)`;
   const c4=card(nSab===0?"is-ok":"is-warn",`Immobilisation à ${declTxt} ‰`, nSab===0?"b-ok":"b-warn", iBadge,
     `<p class="say">Frein à ressort <b>${ress.toFixed(0)} kN</b> · requis <b>${req.toFixed(0)} kN</b> → ${verdict}.</p>
-     <table class="ladder"><thead><tr><th>Immobilisation</th><th>Effort</th><th>Rampe&nbsp;max</th></tr></thead><tbody>${ladder}</tbody></table>${parkNote}${towImmoNote}${beyond}
+     <table class="ladder"><thead><tr><th>Immobilisation</th><th>Effort</th><th>Rampe&nbsp;max</th></tr></thead><tbody>${ladder}</tbody></table>${parkNote}${towImmoNote}${paralyseNote}${beyond}
      <div class="formula"><span class="lbl"># effort de retenue : LMR §5.7/§5.5 (= Compl.1 DE PCT NIOP) · 1 sabot = ${sab1} kN (${charge==="total"?"chargé":"vide"})</span>
 Requis ≈ 0.01385 × ${P.toFixed(0)} t × ${declTxt} ‰ = ${req.toFixed(0)} kN
 Frein à ressort seul tient jusqu'à ${declMaxRess.toFixed(0)} ‰ ; sabot nécessaire (force) au-delà.
@@ -1038,13 +1048,14 @@ function render(){ renderTrain(); renderMotors(); renderResults(); renderSources
 }
 
 /* ======================= ÉVÉNEMENTS ======================= */
-function add(keys){ keys.forEach(k=>train.push({key:k,par:false,mot:isMotrice(k)?[false,false,false,false]:null,fb:V[k].fam==="flirt"?"none":null})); render(); }
+function add(keys){ keys.forEach(k=>train.push({key:k,par:false,parRessort:false,mot:isMotrice(k)?[false,false,false,false]:null,fb:V[k].fam==="flirt"?"none":null})); render(); }
 document.addEventListener("click",e=>{
   const t=e.target.closest("button, .pz"); if(!t)return;
   if(t.dataset.p){ add(PRESETS[t.dataset.p]); }
   else if(t.dataset.u){ add([t.dataset.u]); }
   else if(t.dataset.x!=null){ train.splice(+t.dataset.x,1); render(); }
   else if(t.dataset.z!=null){ train[+t.dataset.z].par=!train[+t.dataset.z].par; render(); }
+  else if(t.dataset.zr!=null){ train[+t.dataset.zr].parRessort=!train[+t.dataset.zr].parRessort; render(); }
   else if(t.dataset.mot!=null && t.dataset.mi!=null){ const c=train[+t.dataset.mot]; if(c&&c.mot){ c.mot[+t.dataset.mi]=!c.mot[+t.dataset.mi]; render(); } }
   else if(t.dataset.d){ decl=Number(t.dataset.d); $("declNum").value=decl; render(); }
 });
