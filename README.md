@@ -95,7 +95,7 @@ Quelques éléments-clés repris dans l'outil (références entre parenthèses) 
 
 - **Rapport de freinage** : `Σ poids-frein ÷ Σ poids du train × 100` (R 300.5 §3.2).
 - **Effort de retenue** : `K_ret ≈ 0,01385 × poids[t] × déclivité[‰]` (validé sur LMR / Complément 1 DE PCT NIOP).
-- **Séries de freinage (Bremsreihe) transN** :
+- **Catégories de freinage (Bremsreihe)** :
   - R : `150, 135, 125, 115, 105`
   - A et D : `115, 105, 95, 85, 80, 75, 70, 65, 60, 50`
 - **Plafonds de vitesse par catégorie** : R = 160, A = 120, **D = 80 km/h** (D = 80 spécifique à transN, *CH I-30001*).
