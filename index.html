@@ -249,7 +249,23 @@
   .dcard p{margin:6px 0 0;font-size:13px;line-height:1.5;color:var(--ink)}
   .dcard .proc{color:var(--muted);font-size:12.5px}
   .dintro{font-size:13px;color:var(--muted);margin:0 0 16px;line-height:1.5}
+  /* simulation de rupture d'attelage — attelages cliquables */
+  .ruptStrip{display:flex; flex-wrap:wrap; align-items:center; gap:3px; margin:8px 0 10px}
+  .rv{font-size:10.5px; font-weight:700; color:var(--ink); background:#fff; border:1.5px solid var(--line-strong); border-radius:7px; padding:5px 7px; white-space:nowrap; line-height:1.1}
+  .rv.p1{border-color:#7a9bc9; background:#eef3fa}
+  .rv.p2{border-color:#cf8a55; background:#fdf3ea}
+  .rv.unbr{border-style:dashed; color:var(--bad); border-color:var(--bad-line)}
+  .rv.deg{border-style:dashed; color:var(--warn); border-color:var(--warn-line)}
+  .rv small{font-weight:600; font-size:9px; opacity:.85}
+  .cpl{font-size:14px; line-height:1; color:var(--line-strong); background:none; border:none; cursor:pointer; padding:3px 1px; border-radius:5px; font-family:inherit}
+  .cpl:hover{color:var(--ink); background:var(--line)}
+  .cpl.cut{color:var(--bad); font-weight:700}
+  .rpart{font-size:12px; line-height:1.45; margin-top:5px; color:var(--ink)}
+  .rpart .tag{font-weight:700}
+  .rpart.ok{border-left:3px solid var(--ok); padding-left:8px}
+  .rpart.bad{border-left:3px solid var(--bad); padding-left:8px}
 </style>
+
 </head>
 <body>
 <div class="wrap">
@@ -463,13 +479,13 @@ const V = {
   INOVA:{nom:"INOVA",court:"INOVA",role:"Intermédiaire",fam:"domino",cat:"R",vmax:140,
          tare:36,total:50,pfR:70,remorque:70,rqVmax:80,ressort:{cff:[21,25],transn:[21,25]},sabot:{tare:18,total:21},freine:true,
          src:"LMR Domino P20005282 §1.1.3"},
-  ABt:{nom:"ABt DO",court:"ABt DO",role:"Commande",fam:"domino",cat:"R",vmax:140,
+  ABt:{nom:"ABt DO",court:"ABt DO",role:"Voiture de commande",fam:"domino",cat:"R",vmax:140,
        tare:38,total:43,pfR:55,remorque:55,rqVmax:80,ressort:{cff:[21,21],transn:[21,21]},sabot:{tare:18,total:21},freine:true,
        src:"LMR Domino P20005282 §1.1.2"},
-  RABe523:{nom:"RABe 523",court:"RABe 523",role:"Rame transN",fam:"flirt",cat:"R",vmax:160,
+  RABe523:{nom:"RABe 523",court:"RABe 523",role:"Rame automotrice",fam:"flirt",cat:"R",vmax:160,
            tare:121,total:145,pfR:245,remorque:179,rqVmax:140,ressort:{cff:[124,124],transn:[95,95]},sabot:{tare:19,total:25},freine:true,
            src:"LMR Flirt P20003126 §1.1.7 · transN PE P35011099"},
-  RABe527:{nom:"RABe 527",court:"RABe 527",role:"Rame transN",fam:"flirt",cat:"R",vmax:160,
+  RABe527:{nom:"RABe 527",court:"RABe 527",role:"Rame automotrice",fam:"flirt",cat:"R",vmax:160,
            tare:120,total:141,pfR:226,remorque:96,rqVmax:140,ressort:{cff:[73,80],transn:[95,95]},sabot:{tare:19,total:25},freine:true,
            src:"LMR Flirt P20003126 §1.1.7 · transN PE P35011099"},
 };
@@ -508,8 +524,11 @@ const BANDS={R:[105,160], A:[50,120], D:[50,80]};
 /* Catégories de freinage transN (Bremsreihen) — compl. TPF/transN/Travys
    (CH I-30001 §300.5 p.336). Règle : on retient le palier <= rapport calculé. */
 const BREMS={R:[150,135,125,115,105], AD:[115,105,95,85,80,75,70,65,60,50]};
-/* Tableau de freinage IIA (DE-OCF) : rapport partiel min @25 km/h — À RENSEIGNER */
-const PARTIEL_MIN_25={28:null};
+/* Tableau de freinage IIA (DE-OCF transN), colonne 25 km/h : rapport de freinage partiel
+   minimal (%) par déclivité déterminante (DE PCT NIOP §3.1 ; seuil §3.5.4 R 300.5).
+   Lecture par tranche : on prend la 1re déclivité >= à la déclivité considérée. */
+const PARTIEL_IIA_25=[[0,12],[5,16],[10,19],[15,23],[20,27],[25,31],[30,36],[35,42],[40,48],[45,53],[50,59]];
+const seuilPartiel=d=>{ for(const [g,v] of PARTIEL_IIA_25) if(d<=g) return [g,v]; return [null,null]; };
 
 /* ---- Remorquage par un tracteur (convoi de secours) ----
    - Domino (RBDe/D3/D4) : charge normale du RBDe 560 par rampe (LMR Domino §5.2) ;
@@ -610,6 +629,7 @@ const FLIRT_BRAKE_ORDER=["none","m1","p15","p3","m2"];
 /* ======================= ÉTAT ======================= */
 let train=[];                 // [{key, par:false}]
 let decl=27, charge="total", source="cff", towMode=false, tractor="none";
+let cutAt=null;               // attelage coupé (index 0-based entre véh. i et i+1), null = pire coupure auto
 
 /* ======================= CALCULS ======================= */
 const arr=x=>Math.floor(x+0.5);
@@ -690,43 +710,85 @@ function effortRequis(P,d){
   }
   return interp(RET[150])*P/150;     // extrapolation linéaire >150 t
 }
-function controlePartiel(){
-  const hasDomino=train.some(c=>V[c.key].fam==="domino");
+function ruptureSim(){
+  const n=train.length;
+  const isF=n>0 && train.every(c=>V[c.key].fam==="flirt");
   const flirtScenario=train.some(c=>V[c.key].fam==="flirt" && c.fb && c.fb!=="none");
-  if(!hasDomino && train.length){     // train de rames Flirt (indissociables)
-    if(!flirtScenario)
-      return {st:"ok",badge:"Freine des 2 côtés",
-        say:"Rame(s) Flirt indissociable(s), tous bogies freinés → pas de rupture d'attelage interne. En UM, une rupture au coupleur déclenche le frein d'urgence sur les deux rames.",
-        formula:"Rame indissociable + tous bogies freinés ⇒ rien à calculer."};
-    return {st:"warn",badge:"Voir §9.4",
-      say:"Frein paralysé sur un bogie : la rame reste majoritairement freinée. Pas de rupture interne ; la catégorie dégradée officielle (carte ci-dessus, LMR §9.4) couvre ce cas.",
-      formula:"Bogie paralysé → catégorie §9.4 (pas de rapport partiel à recalculer)."};
+  const [gBr,seuil]=seuilPartiel(decl);
+  const seuilTxt = seuil==null ? "hors tableau IIA (> 50 ‰)" : `${seuil} % (tableau de freinage IIA @25 km/h · ${gBr===Math.round(decl)?`${gBr} ‰`:`${Math.round(decl)} ‰ → tranche ${gBr} ‰`})`;
+  // 1 seule entrée -> rame / véhicule indissociable, aucun attelage interne
+  if(n<=1){
+    if(isF) return {st: flirtScenario?"warn":"ok", badge: flirtScenario?"Voir §9.4":"Indissociable",
+      html:`<p class="say">Rame Flirt <b>indissociable</b> (caisses sur bogies Jacobs) → aucun attelage interne à rompre. Une rupture n'est possible qu'au coupleur, en UM (ajoute une 2e rame).${flirtScenario?` Bogie paralysé : la catégorie dégradée (§9.4) couvre ce cas.`:``}</p>`};
+    return {st:"ok",badge: n?"1 véhicule":"—",
+      html:`<p class="say">${n?"Un seul véhicule → aucun attelage à rompre.":"Compose un train pour simuler une rupture d'attelage."}</p>`};
   }
-  const anyPar=train.some(c=>c.par);
-  const allBraked=train.every(c=>V[c.key].freine && !c.par);
-  if(!anyPar && allBraked)
-    return {st:"ok",badge:"Freine des 2 côtés",
-      say:"Tous les véhicules sont freinés → rapport de freinage partiel atteint par principe "+
-          "(R 300.5 §3.5.4), aucun calcul. Une rupture d'attelage déchire la conduite générale → "+
-          "frein d'urgence sur les deux parties.",
-      formula:"Règle : tous véhicules freinés ⇒ rapport partiel atteint, pas de calcul."};
-  // calcul à chaque point de coupure
-  const P=train.map(c=>V[c.key][charge]);
-  const PF=train.map(c=>(c.par||!V[c.key].freine)?0:V[c.key].pfR);
-  const n=train.length, parts=[];
-  for(let cut=1;cut<n;cut++){let pp=0,pf=0;for(let i=cut;i<n;i++){pp+=P[i];pf+=PF[i];}parts.push(pp?pf/pp*100:0);}
-  for(let cut=1;cut<Math.min(n,6);cut++){let pp=0,pf=0;for(let i=0;i<=cut;i++){pp+=P[i];pf+=PF[i];}parts.push(pp?pf/pp*100:0);}
-  const min=parts.length?Math.min(...parts):0;
-  const seuil=PARTIEL_MIN_25[Math.round(decl)];
-  if(seuil==null)
-    return {st:"warn",badge:"À vérifier",
-      say:`Frein paralysé présent. Plus petit rapport de freinage partiel = ${min.toFixed(0)} %. `+
-          `À comparer au minimum du tableau de freinage IIA à 25 km/h / ${Math.round(decl)} ‰ (valeur à renseigner).`,
-      formula:`partiel min = min(segments) = ${min.toFixed(0)} %\n${"\u00A0".repeat(0)}seuil IIA @25 km/h / ${Math.round(decl)}‰ = ? (à renseigner)`};
-  const ok=min>=seuil;
-  return {st:ok?"ok":"bad",badge:ok?"Suffisant":"Insuffisant",
-    say:`Plus petit rapport partiel ${min.toFixed(0)} % ${ok?"≥":"<"} ${seuil} % exigé (25 km/h / ${Math.round(decl)} ‰) → ${ok?"OK":"insuffisant, mesures requises"}.`,
-    formula:`partiel min = ${min.toFixed(0)} %  ${ok?"≥":"<"}  ${seuil} % (IIA @25 km/h / ${Math.round(decl)}‰)`};
+  // >= 2 entrées : attelages cuttables. Poids-frein partiel par véhicule :
+  //  - Domino frein de service paralysé / non freiné -> 0
+  //  - Flirt bogies paralysés -> catégorie dégradée OFFICIELLE §9.4 (les bogies sains freinent)
+  //  - sinon : poids-frein plein (ou remorqué si mode remorqué global)
+  const PF=train.map(c=>{
+    const v=V[c.key];
+    if(c.par||!v.freine) return 0;
+    if(v.fam==="flirt" && c.fb && c.fb!=="none"){
+      const s=FLIRT_BRAKE[c.fb];
+      return s.reihe!=null ? s.reihe/100*v[charge] : v.remorque;   // reihe = % dégradé ; m2 -> remorqué (frein à air)
+    }
+    return towMode?v.remorque:v.pfR;
+  });
+  const W=train.map(c=>V[c.key][charge]);
+  const cpl=[];
+  for(let i=0;i<n-1;i++){
+    let fpf=0,fw=0,rpf=0,rw=0;
+    for(let j=0;j<=i;j++){fpf+=PF[j];fw+=W[j];}
+    for(let j=i+1;j<n;j++){rpf+=PF[j];rw+=W[j];}
+    cpl.push({i, fr:fw?fpf/fw*100:0, rr:rw?rpf/rw*100:0});
+  }
+  const minRap=Math.min(...cpl.map(c=>Math.min(c.fr,c.rr)));
+  const worstIdx=cpl.reduce((a,b)=>Math.min(b.fr,b.rr)<Math.min(a.fr,a.rr)?b:a).i;
+  const sel=(cutAt!=null && cutAt>=0 && cutAt<n-1)?cutAt:worstIdx;
+  // bande de véhicules + attelages cliquables
+  let strip='<div class="ruptStrip">';
+  train.forEach((c,i)=>{
+    const v=V[c.key];
+    const part = i<=sel?'p1':'p2';
+    const deg = (v.fam==="flirt" && c.fb && c.fb!=="none");
+    const mark = (c.par||!v.freine)?' unbr':(deg?' deg':'');
+    const degLbl = deg ? ` <small>${FLIRT_BRAKE[c.fb].reihe!=null?FLIRT_BRAKE[c.fb].train+" "+FLIRT_BRAKE[c.fb].reihe:"remorqué"}</small>` : '';
+    strip+=`<span class="rv ${part}${mark}">${v.court}${degLbl}</span>`;
+    if(i<n-1) strip+=`<button class="cpl ${sel===i?'cut':''}" data-cut="${i}" title="Simuler une rupture ici">${sel===i?'✂':'⊗'}</button>`;
+  });
+  strip+='</div>';
+  // détail des 2 parties pour la coupure sélectionnée
+  const s=cpl[sel];
+  const front=train.slice(0,sel+1), rear=train.slice(sel+1);
+  const partLine=(label,rap,vehs)=>{
+    let cls,txt;
+    if(rap<=0){ cls="bad"; txt=`<b>NE FREINE PAS</b> (aucun frein actif) → risque de dérive`; }
+    else if(seuil!=null && rap<seuil){ cls="bad"; txt=`freine mais <b>insuffisant</b> — ${rap.toFixed(0)} % &lt; ${seuil} %`; }
+    else { cls="ok"; txt=`<b>freine</b> — ${rap.toFixed(0)} %${seuil!=null?` ≥ ${seuil} %`:""}`; }
+    const names=vehs.map(c=>{const v=V[c.key]; if(v.fam==="flirt"&&c.fb&&c.fb!=="none"){const s=FLIRT_BRAKE[c.fb]; return v.court+(s.reihe!=null?` (${s.train} ${s.reihe}, §9.4)`:` (remorqué, §9.4)`);} return v.court;}).join(" + ");
+    return `<div class="rpart ${cls}"><span class="tag">${label}</span> (${vehs.length} véh.) : ${names}<br>→ ${txt}</div>`;
+  };
+  const parts=partLine("Partie avant",s.fr,front)+partLine("Partie arrière",s.rr,rear);
+  // verdict global = pire coupure possible (règle R 300.5 §3.5.4)
+  let st,badge,headline;
+  if(seuil==null){ st="warn"; badge="Hors table"; headline=`Plus petit rapport partiel = <b>${minRap.toFixed(0)} %</b>. Au-delà de 50 ‰ : hors tableau de freinage IIA.`; }
+  else if(minRap<=0){ st="bad"; badge="Danger"; headline=`Une rupture peut isoler une partie <b>sans frein actif</b> → risque de dérive. À sécuriser (R 300.5 §12.2).`; }
+  else if(minRap<seuil){ st="bad"; badge="Insuffisant"; headline=`Pire coupure : plus petit rapport partiel <b>${minRap.toFixed(0)} %</b> &lt; <b>${seuil} %</b> requis → <b>insuffisant</b> (mesures §12.2).`; }
+  else { st="ok"; badge="Suffisant"; headline=`Pire coupure : plus petit rapport partiel <b>${minRap.toFixed(0)} %</b> ≥ <b>${seuil} %</b> requis → chaque partie freine.`; }
+  const flirtDeg=train.some(c=>V[c.key].fam==="flirt" && c.fb && c.fb!=="none");
+  const allBraked=train.every(c=>V[c.key].freine && !c.par) && !flirtDeg;
+  const principe = allBraked?`<p class="say" style="color:var(--muted);margin-top:6px">Tous les véhicules freinés → rapport partiel <b>atteint par principe</b> (R 300.5 §3.5.4) ; les valeurs ci-dessus le confirment.</p>`:"";
+  const flirtNote = flirtDeg?`<p class="say" style="color:var(--muted);margin-top:6px">Rame Flirt à bogies paralysés : le rapport partiel suit la <b>catégorie dégradée officielle §9.4</b> (les bogies sains freinent encore), pas le poids-frein plein.</p>`:"";
+  const towNote = towMode?`<p class="say" style="color:var(--muted);margin-top:6px">Remorqué : freinage à l'air seul (poids-frein remorqué, réduit).</p>`:"";
+  const html=`<p class="say">${headline}</p>
+    <p class="say" style="color:var(--muted);margin:9px 0 1px">Clique un attelage <b>⊗</b> pour simuler une rupture à cet endroit :</p>
+    ${strip}${parts}${principe}${flirtNote}${towNote}
+    <div class="formula"><span class="lbl"># R 300.5 §3.5.4 · seuil = ${seuilTxt}</span>
+coupure sélectionnée : partie avant ${s.fr.toFixed(0)} % · partie arrière ${s.rr.toFixed(0)} %
+plus petit rapport partiel (toutes coupures) = ${minRap.toFixed(0)} %</div>`;
+  return {st,badge,html};
 }
 
 /* ======================= RENDU ======================= */
@@ -850,10 +912,9 @@ ${perTxt}${ec.scenario?`\n\nClasse = % de freinage, pas une vitesse.\nNON recalc
   }
 
   /* 3 — Rupture d'attelage */
-  const cp=controlePartiel();
+  const cp=ruptureSim();
   const m={ok:["is-ok","b-ok"],warn:["is-warn","b-warn"],bad:["is-bad","b-bad"]}[cp.st];
-  const c3=card(m[0],"Rupture d'attelage",m[1],cp.badge,
-    `<p class="say">${cp.say}</p><div class="formula"><span class="lbl"># R 300.5 §3.5.4</span>\n${cp.formula}</div>`);
+  const c3=card(m[0],"Rapport de freinage partiel (en cas de rupture d'attelage)",m[1],cp.badge,cp.html);
 
   /* 4 — Immobilisation : effort de retenue (LMR §5.5/§5.7 + Compl.1) — compte basé sur la force */
   const P=poidsTrain(), req=effortRequis(P,decl);
@@ -1054,14 +1115,15 @@ function render(){ renderTrain(); renderMotors(); renderResults(); renderSources
 }
 
 /* ======================= ÉVÉNEMENTS ======================= */
-function add(keys){ keys.forEach(k=>train.push({key:k,par:false,parRessort:false,mot:isMotrice(k)?[false,false,false,false]:null,fb:V[k].fam==="flirt"?"none":null})); render(); }
+function add(keys){ keys.forEach(k=>train.push({key:k,par:false,parRessort:false,mot:isMotrice(k)?[false,false,false,false]:null,fb:V[k].fam==="flirt"?"none":null})); cutAt=null; render(); }
 document.addEventListener("click",e=>{
   const t=e.target.closest("button, .pz"); if(!t)return;
   if(t.dataset.p){ add(PRESETS[t.dataset.p]); }
   else if(t.dataset.u){ add([t.dataset.u]); }
-  else if(t.dataset.x!=null){ train.splice(+t.dataset.x,1); render(); }
+  else if(t.dataset.x!=null){ train.splice(+t.dataset.x,1); cutAt=null; render(); }
   else if(t.dataset.z!=null){ train[+t.dataset.z].par=!train[+t.dataset.z].par; render(); }
   else if(t.dataset.zr!=null){ train[+t.dataset.zr].parRessort=!train[+t.dataset.zr].parRessort; render(); }
+  else if(t.dataset.cut!=null){ const i=+t.dataset.cut; cutAt=(cutAt===i)?null:i; render(); }
   else if(t.dataset.mot!=null && t.dataset.mi!=null){ const c=train[+t.dataset.mot]; if(c&&c.mot){ c.mot[+t.dataset.mi]=!c.mot[+t.dataset.mi]; render(); } }
   else if(t.dataset.d){ decl=Number(t.dataset.d); $("declNum").value=decl; render(); }
 });
@@ -1069,7 +1131,7 @@ document.addEventListener("change",e=>{
   const sel=e.target.closest(".fbsel"); if(!sel)return;
   const c=train[+sel.dataset.fb]; if(c){ c.fb=sel.value; render(); }
 });
-$("clear").addEventListener("click",()=>{ train=[]; render(); });
+$("clear").addEventListener("click",()=>{ train=[]; cutAt=null; render(); });
 $("declNum").addEventListener("input",e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ decl=Math.max(0,Math.min(70,v)); render(); }});
 function bindSeg(id,setter){
   $(id).addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
