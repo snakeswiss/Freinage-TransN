@@ -375,18 +375,29 @@ def effort_disponible(train, charge="total", n_sabots=0, flirt_brakes=None,
     return ressort + n_sabots * sabot1, ressort, sabot1
 
 def immobilisation(train, decl=27, charge="total", flirt_brakes=None,
-                   freins_ressort_paralyses=None):
+                   freins_ressort_paralyses=None, towed=False):
     P = poids_train(train, charge)
     req = effort_requis(P, decl)
-    dispo0, ressort, sabot1 = effort_disponible(train, charge, 0, flirt_brakes,
+    _, ressort_full, sabot1 = effort_disponible(train, charge, 0, flirt_brakes,
                                                 freins_ressort_paralyses)
+    # remorqué : le frein à ressort doit être DESSERRÉ pour permettre le remorquage -> ne retient pas
+    ressort = 0.0 if towed else ressort_full
     # nombre de sabots basé sur la FORCE (échelle LMR §5.5/§5.7)
-    manque = max(0.0, req - dispo0)
+    manque = max(0.0, req - ressort)
     n_sabots = math.ceil(manque / sabot1) if manque > 0 else 0
-    dispo, _, _ = effort_disponible(train, charge, n_sabots, flirt_brakes,
-                                    freins_ressort_paralyses)
+    dispo = ressort + n_sabots * sabot1
     decl_max_ressort = math.floor(min(DECL_CAP, ressort / (K_RETENUE * P))) if P else 0
-    if n_sabots == 0:
+    decl_max_full = math.floor(min(DECL_CAP, ressort_full / (K_RETENUE * P))) if P else 0
+    if towed:
+        if n_sabots == 0:
+            msg = (f"Frein à ressort desserré (remorquage) = 0 kN ; requis {req:.0f} kN "
+                   f"à {decl:.0f} ‰ -> aucune retenue nécessaire (terrain plat).")
+        else:
+            msg = (f"Frein à ressort DESSERRÉ (remorquage) = 0 kN, requis {req:.0f} kN "
+                   f"à {decl:.0f} ‰ -> immobiliser aux {n_sabots} sabot(s) "
+                   f"(= {dispo:.0f} kN >= {req:.0f} kN). Resserré à l'arrêt : "
+                   f"tient seul jusqu'à {decl_max_full:.0f} ‰.")
+    elif n_sabots == 0:
         msg = (f"Frein à ressort seul = {ressort:.0f} kN >= requis {req:.0f} kN "
                f"à {decl:.0f} ‰ -> tient jusqu'à {decl_max_ressort:.0f} ‰, aucun sabot.")
     else:
@@ -396,7 +407,8 @@ def immobilisation(train, decl=27, charge="total", flirt_brakes=None,
     return {
         "poids": P, "requis": req, "ressort": ressort, "sabot1": sabot1,
         "n_sabots": n_sabots, "dispo": dispo,
-        "decl_max_ressort": decl_max_ressort,
+        "decl_max_ressort": decl_max_ressort, "decl_max_full": decl_max_full,
+        "ressort_full": ressort_full, "towed": towed,
         "ok_ressort": ressort >= req,
         "msg": msg,
     }
@@ -418,7 +430,7 @@ def analyse_remorque(units, decl=27, charge="total"):
     tow_cap = min(v["rq_vmax"] for v in train)
     cat_vmax = cg_rq["vmax"] if cg_rq["train"] else 0
     plafond = min(cat_vmax, tow_cap) if cg_rq["train"] else 0
-    im = immobilisation(train, decl, charge)
+    im = immobilisation(train, decl, charge, towed=True)
 
     def cat_txt(cg): return f"{cg['train']} {cg['reihe']}" if cg["train"] else "SOUS MIN (<50%)"
     L = ["=" * 70, f"REMORQUÉ (rame tractée, en panne) : {noms}",
@@ -437,9 +449,11 @@ def analyse_remorque(units, decl=27, charge="total"):
         L.append(f"    Vitesse réelle pour {cat_txt(cg_rq)} à {decl:.0f} ‰ : voir RADN (plus basse en forte pente).")
     else:
         L.append("    Rapport < 50 % -> ne peut rouler sous ses propres freins.")
-    L.append("[3] IMMOBILISATION (frein à ressort, indépendant du frein à air)")
+    L.append("[3] IMMOBILISATION (frein à ressort desserré pour le remorquage)")
     L.append("    " + im["msg"])
-    L.append("    Le frein à ressort fonctionne normalement ; rame sans air = ressort serré.")
+    L.append("    Pour remorquer, le frein à ressort doit être desserré -> il ne retient "
+             "pas le convoi. Immobiliser aux sabots, ou resserrer le frein à ressort à "
+             "l'arrêt (air purgé, frein non bloqué mécaniquement).")
     return "\n".join(L)
 
 
