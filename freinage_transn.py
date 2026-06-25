@@ -357,10 +357,14 @@ def effort_requis(poids, decl):
     v150 = interp_decl(RETENUE_TABLE[150])
     return v150 * poids / 150.0
 
-def effort_disponible(train, charge="total", n_sabots=0, flirt_brakes=None):
+def effort_disponible(train, charge="total", n_sabots=0, flirt_brakes=None,
+                      freins_ressort_paralyses=None):
     flirt_brakes = flirt_brakes or {}
+    rpar = set(freins_ressort_paralyses or [])
     ressort = 0.0
     for i, v in enumerate(train):
+        if i in rpar:                       # frein à ressort paralysé -> ne contribue pas
+            continue
         r = v["ressort_c"] if charge == "total" else v["ressort_v"]
         if v["role"] == "rame":
             r *= (1 - FLIRT_BRAKE[flirt_brakes.get(i, "none")]["ressort_red"])
@@ -370,14 +374,17 @@ def effort_disponible(train, charge="total", n_sabots=0, flirt_brakes=None):
                   for v in train), default=(SABOT_KN_CHARGE if charge == "total" else SABOT_KN_VIDE))
     return ressort + n_sabots * sabot1, ressort, sabot1
 
-def immobilisation(train, decl=27, charge="total", flirt_brakes=None):
+def immobilisation(train, decl=27, charge="total", flirt_brakes=None,
+                   freins_ressort_paralyses=None):
     P = poids_train(train, charge)
     req = effort_requis(P, decl)
-    dispo0, ressort, sabot1 = effort_disponible(train, charge, 0, flirt_brakes)
+    dispo0, ressort, sabot1 = effort_disponible(train, charge, 0, flirt_brakes,
+                                                freins_ressort_paralyses)
     # nombre de sabots basé sur la FORCE (échelle LMR §5.5/§5.7)
     manque = max(0.0, req - dispo0)
     n_sabots = math.ceil(manque / sabot1) if manque > 0 else 0
-    dispo, _, _ = effort_disponible(train, charge, n_sabots, flirt_brakes)
+    dispo, _, _ = effort_disponible(train, charge, n_sabots, flirt_brakes,
+                                    freins_ressort_paralyses)
     decl_max_ressort = math.floor(min(DECL_CAP, ressort / (K_RETENUE * P))) if P else 0
     if n_sabots == 0:
         msg = (f"Frein à ressort seul = {ressort:.0f} kN >= requis {req:.0f} kN "
@@ -595,7 +602,7 @@ def analyse_remorquage_convoi(units, tracteur, decl=27, charge="total"):
 
 
 def analyse(units, decl=27, charge="total", freins_paralyses=None, mg=False,
-            motors=None, flirt_brakes=None):
+            motors=None, flirt_brakes=None, freins_ressort_paralyses=None):
     train = build_train(units)
     noms = " + ".join(v["nom"] for v in train)
     L = []
@@ -642,7 +649,7 @@ def analyse(units, decl=27, charge="total", freins_paralyses=None, mg=False,
     L.append("    " + cp["msg"])
 
     # 4) Immobilisation
-    im = immobilisation(train, decl, charge, flirt_brakes)
+    im = immobilisation(train, decl, charge, flirt_brakes, freins_ressort_paralyses)
     L.append(f"\n[4] IMMOBILISATION à {decl:.0f} ‰")
     L.append("    " + im["msg"])
     # échelle officielle : frein à ressort seul, +1, +2, +3 sabots -> rampe max
@@ -656,6 +663,19 @@ def analyse(units, decl=27, charge="total", freins_paralyses=None, mg=False,
         L.append(f"      {label:<22} {e:>5.0f} kN  ->  <= {dmax:.0f} ‰{tag}")
         if dmax >= DECL_CAP:
             break
+    # frein paralysé Domino = frein de service (poids-frein, §9.2.1), pas le frein à ressort
+    _par = freins_paralyses or []
+    _par_idx = set(_par.keys()) if isinstance(_par, dict) else set(_par)
+    if any(i < len(train) and not train[i]["_key"].startswith("RABe") for i in _par_idx):
+        L.append("    Note : un frein de service paralysé isole le poids-frein "
+                 "(§9.2.1) -> agit sur le rapport, pas sur l'immobilisation. Le frein à "
+                 "ressort (§5.7) est un circuit indépendant. Pour le retirer aussi, utiliser "
+                 "freins_ressort_paralyses.")
+    _rpar = set(freins_ressort_paralyses or [])
+    if _rpar:
+        n = len(_rpar)
+        L.append(f"    Frein à ressort paralysé sur {n} véhicule(s) -> exclu(s) de "
+                 f"l'immobilisation (frein à ressort réduit à {im['ressort']:.0f} kN ci-dessus).")
     if decl > 20:
         L.append(f"    (Mise en garage prolongée — R 300.4 §1.7.2 : poser en outre >= 1 "
                  f"sabot pour tout véhicule garé sur pente > 20 ‰ ; ici le frein à "
