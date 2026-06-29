@@ -93,7 +93,7 @@ L'outil reprend les formules, barèmes et données des documents officiels suiva
 
 Quelques éléments-clés repris dans l'outil (références entre parenthèses) :
 
-- **Rapport de freinage** : `Σ poids-frein ÷ Σ poids du train × 100` (R 300.5 §3.2).
+- **Rapport de freinage** : `Poids-frein ÷ Poids du train × 100` (R 300.5 §3.2).
 - **Effort de retenue** : `K_ret ≈ 0,01385 × poids[t] × déclivité[‰]` (validé sur LMR / Complément 1 DE PCT NIOP).
 - **Catégories de freinage (Bremsreihe)** :
   - R : `150, 135, 125, 115, 105`
